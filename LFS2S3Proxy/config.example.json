@@ -1,0 +1,5 @@
+﻿{
+  "s3bucketName": "lfs-bucket",
+  "token": "pNXZXltJupkCR3fXv9YnqJXknJuAeELu0IFgeXofZ4gYGa5J950bDxJ01G0TFCATgX4pflgqOj4unVRA5NJMBj3JyqKPvWWtLsl2AKtdfwbsoCf1H9uLZLRsSYpFMY7u",
+  "listen": "http://localhost:5555/"
+}
