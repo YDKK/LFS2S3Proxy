@@ -2,6 +2,8 @@
 Git LFS Proxy (use Amazon S3 as datastore)  
 https://ydkk.hateblo.jp/entry/2017/12/07/120000
 
+<img src="https://cdn-ak.f.st-hatena.com/images/fotolife/Y/YDKK/20171207/20171207012533.png" width=500>
+
 ## Usage
 Edit `config.example.json` and save it as `config.json`.
 
