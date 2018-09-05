@@ -5,17 +5,19 @@ using System.Linq;
 using System.Net;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using Amazon.Runtime.Internal;
-using Codeplex.Data;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Topshelf;
 
 namespace LFS2S3Proxy
 {
     class Program
     {
-        const string version = "LFS2S3Proxy v0.3";
+        const string version = "LFS2S3Proxy v1.0";
         static void Main(string[] args)
         {
             HostFactory.Run(x =>
@@ -68,14 +70,14 @@ namespace LFS2S3Proxy
                     return;
                 }
 
-                var config = DynamicJson.Parse(File.ReadAllText("config.json"));
-                _proxy = new S3Proxy(config.s3bucketName);
+                dynamic config = JObject.Parse(File.ReadAllText("config.json"));
+                _proxy = new S3Proxy((string)config.s3bucketName);
                 _token = config.token;
 
-                _server = new HttpServer(config.listen);
+                _server = new HttpServer((string)config.listen);
 
-                _list.Add(_server.Subscribe(Event));
                 _list.Add(_server.Subscribe(ctx => Console.WriteLine("Request to: " + ctx.Request.RawUrl)));
+                _list.Add(_server.Subscribe(Event));
 
                 Console.WriteLine($"{version} started at {config.listen}");
             }
@@ -97,6 +99,12 @@ namespace LFS2S3Proxy
                         return;
                     }
 
+                    if (ctx.Request.RawUrl.EndsWith("/verify") && ctx.Request.RawUrl.Count(x => x == '/') == 3)
+                    {
+                        var repositoryName = ctx.Request.RawUrl.Split('/')[2];
+                        _proxy.Verify(ctx, repositoryName);
+                        return;
+                    }
                 }
                 ctx.Respond(new StringResponse("Not Found.", 404));
             }

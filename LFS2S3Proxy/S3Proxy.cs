@@ -5,10 +5,11 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Web.UI.WebControls;
 using Amazon.S3;
 using Amazon.S3.Model;
-using Codeplex.Data;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace LFS2S3Proxy
 {
@@ -54,20 +55,41 @@ namespace LFS2S3Proxy
             }
         }
 
+        private dynamic GetJson(RequestContext context)
+        {
+            using (var stream = new MemoryStream())
+            {
+                context.Request.InputStream.CopyTo(stream);
+
+                var json = Encoding.UTF8.GetString(stream.ToArray());
+
+                return JObject.Parse(json);
+            }
+        }
+
+        public void Verify(RequestContext context, string repositoryName)
+        {
+            var data = GetJson(context);
+
+            var (exist, metadata) = CheckExists(repositoryName, (string)data.oid);
+            if (exist)
+            {
+                context.Respond(new Response());
+                return;
+            }
+
+            context.Respond(new EmptyResponse(404));
+        }
+
         public void Request(RequestContext context, string repositoryName)
         {
-            var stream = new MemoryStream();
-            context.Request.InputStream.CopyTo(stream);
-
-            var json = Encoding.UTF8.GetString(stream.ToArray());
-
-            var data = DynamicJson.Parse(json);
+            var data = GetJson(context);
 
             dynamic response = new ExpandoObject();
 
             response.objects = new List<ExpandoObject>();
 
-            Parallel.ForEach((IEnumerable<dynamic>)(object[])data.objects, o =>
+            Parallel.ForEach((IEnumerable<dynamic>)(JArray)data.objects, o =>
             {
                 dynamic eo = new ExpandoObject();
                 eo.oid = o.oid;
@@ -78,7 +100,7 @@ namespace LFS2S3Proxy
                 }
             });
 
-            switch (data.operation)
+            switch ((string)data.operation)
             {
                 case "upload":
                     Parallel.ForEach((IEnumerable<dynamic>)response.objects, o =>
@@ -90,8 +112,12 @@ namespace LFS2S3Proxy
                             {
                                 upload = new
                                 {
-                                    href = GeneratePreSignedUrl(repositoryName, o.oid, HttpVerb.PUT),
+                                    href = GeneratePreSignedUrl(repositoryName, (string)o.oid, HttpVerb.PUT),
                                     expires_at = DateTime.Now + _urlExpiresAt
+                                },
+                                verify = new
+                                {
+                                    href = $"https://{context.Request.Headers["Host"].First()}{context.Request.RawUrl.Replace("/objects/batch", "/verify")}"
                                 }
                             };
                         }
@@ -107,7 +133,7 @@ namespace LFS2S3Proxy
                             {
                                 download = new
                                 {
-                                    href = GeneratePreSignedUrl(repositoryName, o.oid, HttpVerb.GET),
+                                    href = GeneratePreSignedUrl(repositoryName, (string)o.oid, HttpVerb.GET),
                                     expires_at = DateTime.Now + _urlExpiresAt
                                 }
                             };
@@ -122,8 +148,6 @@ namespace LFS2S3Proxy
                         }
                     });
                     break;
-                case "verify":
-                    break;//not supported yet.
             }
 
             var res = new StringResponse(JsonConvert.SerializeObject(response));
