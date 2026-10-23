@@ -5,7 +5,6 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using System.Web.UI.WebControls;
 using Amazon.S3;
 using Amazon.S3.Model;
 using Newtonsoft.Json;
@@ -13,7 +12,7 @@ using Newtonsoft.Json.Linq;
 
 namespace LFS2S3Proxy
 {
-    public class S3Proxy
+    public class S3Proxy : IDisposable
     {
         private readonly string _bucketName;
         private readonly IAmazonS3 _client;
@@ -22,6 +21,11 @@ namespace LFS2S3Proxy
         {
             _bucketName = bucketName;
             _client = new AmazonS3Client(Amazon.RegionEndpoint.APNortheast1);
+        }
+
+        public void Dispose()
+        {
+            _client.Dispose();
         }
 
         private string GeneratePreSignedUrl(string repositoryName, string key, HttpVerb httpVerb)
@@ -36,19 +40,18 @@ namespace LFS2S3Proxy
             return _client.GetPreSignedURL(request);
         }
 
-        private (bool, MetadataCollection) CheckExists(string repositoryName, string key)
+        private bool CheckExists(string repositoryName, string key)
         {
             try
             {
-                var response = _client.GetObjectMetadata(_bucketName, $"LFS/{repositoryName}/{key}");
-
-                return (true, response.Metadata);
+                _client.GetObjectMetadataAsync(_bucketName, $"LFS/{repositoryName}/{key}").GetAwaiter().GetResult();
+                return true;
             }
 
             catch (AmazonS3Exception ex)
             {
                 if (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
-                    return (false, null);
+                    return false;
 
                 //status wasn't not found, so throw the exception
                 throw;
@@ -71,7 +74,7 @@ namespace LFS2S3Proxy
         {
             var data = GetJson(context);
 
-            var (exist, metadata) = CheckExists(repositoryName, (string)data.oid);
+            var exist = CheckExists(repositoryName, (string)data.oid);
             if (exist)
             {
                 context.Respond(new Response());
@@ -105,7 +108,7 @@ namespace LFS2S3Proxy
                 case "upload":
                     Parallel.ForEach((IEnumerable<dynamic>)response.objects, o =>
                     {
-                        var (exist, metadata) = CheckExists(repositoryName, (string)o.oid);
+                        var exist = CheckExists(repositoryName, (string)o.oid);
                         if (!exist)
                         {
                             o.actions = new
@@ -126,7 +129,7 @@ namespace LFS2S3Proxy
                 case "download":
                     Parallel.ForEach((IEnumerable<dynamic>)response.objects, o =>
                     {
-                        var (exist, metadata) = CheckExists(repositoryName, (string)o.oid);
+                        var exist = CheckExists(repositoryName, (string)o.oid);
                         if (exist)
                         {
                             o.actions = new

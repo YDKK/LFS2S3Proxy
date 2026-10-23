@@ -1,85 +1,132 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Net;
-using System.Reactive.Linq;
-using System.Reactive.Subjects;
-using System.Runtime.CompilerServices;
-using System.Text;
 using System.Threading.Tasks;
-using Amazon.Runtime.Internal;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using Topshelf;
 
 namespace LFS2S3Proxy
 {
     class Program
     {
         const string version = "LFS2S3Proxy v1.0";
-        static void Main(string[] args)
+        static async Task<int> Main(string[] args)
         {
-            HostFactory.Run(x =>
+            var shutdownRequested = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var cleanupCompleted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
             {
-                x.Service<Instance>(s =>
-                {
-                    s.ConstructUsing(name => new Instance());
-                    s.WhenStarted(tc => tc.Start());
-                    s.WhenStopped(tc => tc.Stop());
-                });
+                eventArgs.Cancel = true;
+                shutdownRequested.TrySetResult(true);
+            };
+            EventHandler processExitHandler = (_, _) =>
+            {
+                shutdownRequested.TrySetResult(true);
+                cleanupCompleted.Task.GetAwaiter().GetResult();
+            };
 
-                //Windowsサービスの設定
-                x.RunAsLocalSystem();
-                x.SetDescription("This is LFS2S3Proxy");
-                x.SetDisplayName("LFS2S3Proxy");
-                x.SetServiceName("LFS2S3Proxy_Service");
-            });
+            Console.CancelKeyPress += cancelHandler;
+            AppDomain.CurrentDomain.ProcessExit += processExitHandler;
+            try
+            {
+                using var instance = new Instance();
+                if (!instance.Start())
+                {
+                    return 1;
+                }
+
+                Console.WriteLine("Press Ctrl+C to stop.");
+                await Task.WhenAny(shutdownRequested.Task, instance.Completion).ConfigureAwait(false);
+
+                if (instance.Completion.IsCompleted)
+                {
+                    try
+                    {
+                        await instance.Completion.ConfigureAwait(false);
+                        Console.Error.WriteLine("HTTP listener stopped unexpectedly.");
+                    }
+                    catch (Exception)
+                    {
+                        // Instance.Dispose observes and logs the accept loop failure.
+                    }
+
+                    return 1;
+                }
+
+                instance.Dispose();
+                return instance.Completion.IsFaulted ? 1 : 0;
+            }
+            finally
+            {
+                Console.CancelKeyPress -= cancelHandler;
+                cleanupCompleted.TrySetResult(true);
+                AppDomain.CurrentDomain.ProcessExit -= processExitHandler;
+            }
         }
 
-        private class Instance
+        private class Instance : IDisposable
         {
             private static S3Proxy _proxy;
             private static string _token;
-            private readonly List<IDisposable> _list = new List<IDisposable>();
             private HttpServer _server;
+            private Task _completion = Task.CompletedTask;
+            private bool _disposed;
 
-            public void Stop()
+            public Task Completion => _completion;
+
+            public void Dispose()
             {
-                foreach (var observable in _list)
+                if (_disposed)
                 {
-                    observable.Dispose();
+                    return;
                 }
+                _disposed = true;
 
                 try
                 {
-                    _server.Dispose();
+                    _server?.Dispose();
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // ignored
+                    Console.Error.WriteLine($"Failed to stop HTTP listener: {ex.Message}");
                 }
+
+                _server = null;
+
+                try
+                {
+                    _proxy?.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"Failed to dispose S3 client: {ex.Message}");
+                }
+
+                _proxy = null;
+                _token = null;
             }
 
-            public void Start()
+            public bool Start()
             {
                 if (!File.Exists("config.json"))
                 {
                     Console.Error.WriteLine("config.json not found.");
                     Console.Error.WriteLine("require: s3bucketName, token, listen");
-                    return;
+                    return false;
                 }
 
                 dynamic config = JObject.Parse(File.ReadAllText("config.json"));
                 _proxy = new S3Proxy((string)config.s3bucketName);
                 _token = config.token;
 
-                _server = new HttpServer((string)config.listen);
-
-                _list.Add(_server.Subscribe(ctx => Console.WriteLine("Request to: " + ctx.Request.RawUrl)));
-                _list.Add(_server.Subscribe(Event));
+                _server = new HttpServer((string)config.listen, ctx =>
+                {
+                    Console.WriteLine("Request to: " + ctx.Request.RawUrl);
+                    Event(ctx);
+                });
+                _completion = _server.Completion;
 
                 Console.WriteLine($"{version} started at {config.listen}");
+                return true;
             }
 
             private static void Event(RequestContext ctx)
@@ -90,7 +137,7 @@ namespace LFS2S3Proxy
                     return;
                 }
 
-                if (ctx.Request.RawUrl.StartsWith($"/{_token}/"))
+                if (TokenValidator.MatchesUrlToken(ctx.Request.RawUrl, _token))
                 {
                     if (ctx.Request.RawUrl.EndsWith("/objects/batch") && ctx.Request.RawUrl.Count(x => x == '/') == 4)
                     {

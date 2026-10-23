@@ -1,20 +1,27 @@
 # LFS2S3Proxy
 Git LFS Proxy (use Amazon S3 as datastore)  
-https://ydkk.hateblo.jp/entry/2017/12/07/120000
 
 <img src="https://cdn-ak.f.st-hatena.com/images/fotolife/Y/YDKK/20171207/20171207012533.png" width=500>
 
 ## Usage
-Edit `config.example.json` and save it as `config.json`.
+Install the .NET 10 SDK. From the `LFS2S3Proxy` directory, copy `config.example.json` to `config.json` and edit the settings:
 
-`s3bucketName`: S3 bucket name  
-`token`: The token string which needs to include in the URL when accessing.  
-`listen`: HTTP server listen URL  
+```sh
+cd LFS2S3Proxy
+cp config.example.json config.json
+```
 
-You can install this as a Windows service.
+- `s3bucketName`: S3 bucket name
+- `token`: A non-empty token included as a single URL path segment when accessing (case-sensitive).
+- `listen`: HTTP server listen URL
+
+Run the console application from that directory:
+
 ```
-> LFS2S3Proxy.exe install
+dotnet run
 ```
+
+Press Ctrl+C to stop it.
 
 To configure Git repository to use this proxy, run this command:
 ```sh
